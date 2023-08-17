@@ -2,14 +2,11 @@
 # The RWKV Language Model - https://github.com/BlinkDL/RWKV-LM
 ########################################################################################################
 
-import logging
-logging.basicConfig(level=logging.INFO)
-
 if __name__ == "__main__":
     from argparse import ArgumentParser
     from pytorch_lightning import Trainer
     from pytorch_lightning.utilities import rank_zero_info, rank_zero_only
-
+    from utils import get_model,next_model
     rank_zero_info("########## work in progress ##########")
 
     ########################################################################################################
@@ -54,10 +51,12 @@ if __name__ == "__main__":
 
     parser.add_argument("--load_model", default="", type=str)  # full path, with .pth
     parser.add_argument("--wandb", default="", type=str)  # wandb project name. if "" then don't use wandb
-    parser.add_argument("--proj_dir", default="out", type=str)
+    parser.add_argument("--proj_dir", default="output", type=str)
     parser.add_argument("--random_seed", default="-1", type=int)
 
-    parser.add_argument("--data_file", default="", type=str)
+    parser.add_argument("--data_file", default="/home/neromous/data/data.jsonl", type=str)
+    parser.add_argument("--prefix_data_file", default="/home/neromous/data/prefix.jsonl", type=str)
+    parser.add_argument("--post_data_file", default="/home/neromous/data/post.jsonl", type=str)
     parser.add_argument("--data_type", default="utf-8", type=str)
     parser.add_argument("--vocab_size", default=0, type=int)  # vocab_size = 0 means auto (for char-level LM and .txt data)
 
@@ -84,9 +83,8 @@ if __name__ == "__main__":
     parser.add_argument("--beta2", default=0.99, type=float)  # use 0.999 when your model is close to convergence
     parser.add_argument("--adam_eps", default=1e-8, type=float)
     parser.add_argument("--grad_cp", default=0, type=int)  # gradient checkpt: saves VRAM, but slower
-    parser.add_argument("--dropout", default=0, type=float) # try 0.01 / 0.02 / 0.05 / 0.1
+    parser.add_argument("--dropout", default=0, type=float)
     parser.add_argument("--weight_decay", default=0, type=float) # try 0.1 / 0.01 / 0.001
-    parser.add_argument("--weight_decay_final", default=-1, type=float)
 
     parser.add_argument("--my_pile_version", default=1, type=int)  # my special pile version
     parser.add_argument("--my_pile_stage", default=0, type=int)  # my special pile mode
@@ -114,11 +112,15 @@ if __name__ == "__main__":
     parser.add_argument("--my_random_steps", default=0, type=int)
     parser.add_argument("--my_testing", default='', type=str)
     parser.add_argument("--my_exit", default=99999999, type=int)
-    parser.add_argument("--my_exit_tokens", default=0, type=int)
+    parser.add_argument("--my_exit_tokens", default=-1, type=int)
 
     parser = Trainer.add_argparse_args(parser)
     args = parser.parse_args()
+    if args.load_model == "":
+        args.load_model = get_model(args.proj_dir)
+    args.epoch_begin = next_model(args.proj_dir)
 
+    args.accumulate_grad_batches = 16
     ########################################################################################################
 
     import os, warnings, math, datetime, sys, time
@@ -296,7 +298,7 @@ if __name__ == "__main__":
     ########################################################################################################
 
     from src.trainer import train_callback, generate_init_weight
-    from src.dataset import MyDataset
+    from src.dataset_finetune import MyDataset
 
     train_data = MyDataset(args)
     args.vocab_size = train_data.vocab_size
@@ -305,8 +307,12 @@ if __name__ == "__main__":
         from src.model_img import RWKV_IMG
         model = RWKV_IMG(args)
     else:
-        from src.model import RWKV
-        model = RWKV(args)
+        if args.dropout > 0:
+            from src.model_drop2 import RWKV
+            model = RWKV(args)
+        else:
+            from src.model import RWKV
+            model = RWKV(args)
 
     if len(args.load_model) == 0 or args.my_pile_stage == 1:  # shall we build the initial weights?
         init_weight_name = f"{args.proj_dir}/rwkv-init.pth"
